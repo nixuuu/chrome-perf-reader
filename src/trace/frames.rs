@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::trace::parser::TraceFile;
 
@@ -32,9 +32,9 @@ pub struct FrameDetail {
 pub struct FrameEvent {
     pub name: String,
     pub dur_ms: f64,
-    /// For FunctionCall/EvaluateScript: source URL.
+    /// For `FunctionCall`/`EvaluateScript`: source URL.
     pub url: String,
-    /// For FunctionCall: function name.
+    /// For `FunctionCall`: function name.
     pub function_name: String,
 }
 
@@ -61,16 +61,17 @@ const BREAKDOWN_NAMES: &[&str] = &[
     "ParseHTML",
 ];
 
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 pub fn compute(trace: &TraceFile, limit: usize) -> FrameAnalysis {
     // Collect frame time ranges: (begin_ts, end_ts).
     let mut frame_ranges: Vec<(u64, u64)> = Vec::new();
 
     // Strategy 1: Complete (X) AnimationFrame events.
     for ev in &trace.events {
-        if ev.ph == "X" && ev.name == "AnimationFrame" {
-            if let Some(dur) = ev.dur {
-                frame_ranges.push((ev.ts, ev.ts + dur));
-            }
+        if ev.ph == "X" && ev.name == "AnimationFrame"
+            && let Some(dur) = ev.dur
+        {
+            frame_ranges.push((ev.ts, ev.ts + dur));
         }
     }
 
@@ -148,9 +149,9 @@ pub fn compute(trace: &TraceFile, limit: usize) -> FrameAnalysis {
     sorted_ranges.truncate(limit);
 
     // Build a lookup set of breakdown event names for fast matching.
-    let breakdown_set: HashMap<&str, ()> = BREAKDOWN_NAMES
+    let breakdown_set: HashSet<&str> = BREAKDOWN_NAMES
         .iter()
-        .map(|&n| (n, ()))
+        .copied()
         .collect();
 
     // Collect candidate breakdown events (X events with relevant names on renderer main thread).
@@ -164,14 +165,14 @@ pub fn compute(trace: &TraceFile, limit: usize) -> FrameAnalysis {
             Some(d) if d > 0 => d,
             _ => continue,
         };
-        if !breakdown_set.contains_key(ev.name.as_str()) {
+        if !breakdown_set.contains(ev.name.as_str()) {
             continue;
         }
         // Only events on main thread (if known).
-        if let Some((mp, mt)) = main_thread {
-            if ev.pid != mp || ev.tid != mt {
-                continue;
-            }
+        if let Some((mp, mt)) = main_thread
+            && (ev.pid != mp || ev.tid != mt)
+        {
+            continue;
         }
         candidates.push((ev, dur as f64 / 1000.0));
     }
@@ -230,13 +231,11 @@ pub fn compute(trace: &TraceFile, limit: usize) -> FrameAnalysis {
 }
 
 fn extract_source(ev: &crate::trace::parser::TraceEvent) -> (String, String) {
-    let args = match &ev.args {
-        Some(a) => a,
-        None => return (String::new(), String::new()),
+    let Some(args) = &ev.args else {
+        return (String::new(), String::new());
     };
-    let data = match args.get("data") {
-        Some(d) => d,
-        None => return (String::new(), String::new()),
+    let Some(data) = args.get("data") else {
+        return (String::new(), String::new());
     };
     let url = data
         .get("url")
@@ -267,7 +266,7 @@ fn percentile(sorted: &[u64], pct: usize) -> u64 {
     sorted[idx]
 }
 
-fn empty() -> FrameAnalysis {
+const fn empty() -> FrameAnalysis {
     FrameAnalysis {
         frame_count: 0,
         span_ms: 0.0,

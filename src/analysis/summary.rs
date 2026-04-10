@@ -11,7 +11,7 @@ pub struct Summary {
     pub total_retained_from_root: u64,
     pub unreachable_count: usize,
     pub unreachable_self_size: u64,
-    /// Sorted by total_self_size desc.
+    /// Sorted by `total_self_size` desc.
     pub node_type_histogram: Vec<TypeBucket>,
     /// Sorted by count desc.
     pub edge_type_histogram: Vec<TypeBucket>,
@@ -40,7 +40,7 @@ pub fn compute(
     let type_count = graph.node_type_names.len();
     let mut n_hist: Vec<(u64, u64)> = vec![(0, 0); type_count];
     for i in 0..graph.node_count {
-        let t = graph.node_type(i) as usize;
+        let t = usize::try_from(graph.node_type(i)).unwrap_or(usize::MAX);
         if t < type_count {
             n_hist[t].0 += 1;
             n_hist[t].1 = n_hist[t].1.saturating_add(graph.node_self_size(i));

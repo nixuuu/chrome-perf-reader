@@ -44,7 +44,7 @@ pub fn compute(graph: &HeapGraph, dom: &Dominators, limit: usize) -> Detached {
     let total_retained: u64 = detached
         .iter()
         .map(|(_, s)| *s)
-        .fold(0u64, |a, b| a.saturating_add(b));
+        .fold(0u64, u64::saturating_add);
 
     detached.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     detached.truncate(limit);
@@ -59,6 +59,7 @@ pub fn compute(graph: &HeapGraph, dom: &Dominators, limit: usize) -> Detached {
                 if d < 0 {
                     break;
                 }
+                #[allow(clippy::cast_sign_loss)] // d is non-negative after the check above
                 let d = d as usize;
                 if d == cur {
                     break;

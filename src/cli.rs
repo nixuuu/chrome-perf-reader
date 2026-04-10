@@ -77,6 +77,13 @@ pub enum Command {
         #[arg(value_name = "FILE")]
         file: PathBuf,
     },
+
+    // ---- lighthouse ----
+    /// Lighthouse: full report.
+    Lighthouse {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

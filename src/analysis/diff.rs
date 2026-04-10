@@ -14,9 +14,9 @@ pub struct Diff {
     pub b_nodes: usize,
     /// Type deltas sorted by abs(Δ size) desc, limited to N entries.
     pub type_deltas: Vec<TypeDelta>,
-    /// New nodes in B (not in A), top-N by self_size.
+    /// New nodes in B (not in A), top-N by `self_size`.
     pub new_nodes: Vec<DiffNodeRow>,
-    /// Gone nodes (in A but not in B), top-N by self_size.
+    /// Gone nodes (in A but not in B), top-N by `self_size`.
     pub gone_nodes: Vec<DiffNodeRow>,
 }
 
@@ -90,8 +90,8 @@ pub fn compute(
         .collect();
 
     type_deltas.sort_by(|x, y| {
-        let dx = (x.size_b as i128 - x.size_a as i128).unsigned_abs();
-        let dy = (y.size_b as i128 - y.size_a as i128).unsigned_abs();
+        let dx = (i128::from(x.size_b) - i128::from(x.size_a)).unsigned_abs();
+        let dy = (i128::from(y.size_b) - i128::from(y.size_a)).unsigned_abs();
         dy.cmp(&dx)
     });
 

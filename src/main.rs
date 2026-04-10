@@ -1,5 +1,6 @@
 mod analysis;
 mod cli;
+mod lighthouse;
 mod parser;
 mod report;
 mod trace;
@@ -31,6 +32,8 @@ fn main() -> Result<()> {
         (Some(Command::Hotspots { file }), _) => {
             cmd_trace_hotspots(&file, args.format, args.limit)
         }
+        // Lighthouse subcommand.
+        (Some(Command::Lighthouse { file }), _) => cmd_lighthouse(&file, args.format),
         // Auto-detect.
         (None, Some(file)) => cmd_auto(&file, args.format, args.limit, args.threshold),
         (None, None) => {
@@ -38,6 +41,7 @@ fn main() -> Result<()> {
             eprintln!("       chrome-perf-reader diff <A> <B>");
             eprintln!("       chrome-perf-reader <summary|top|detached> <FILE>  (heap)");
             eprintln!("       chrome-perf-reader <trace|frames|gc|hotspots> <FILE>  (trace)");
+            eprintln!("       chrome-perf-reader lighthouse <FILE>  (lighthouse)");
             std::process::exit(2);
         }
     }
@@ -57,6 +61,9 @@ fn cmd_auto(file: &Path, format: Format, limit: usize, threshold: f64) -> Result
 
     // For .json / .json.gz / .gz, peek content.
     if ext == "json" || ext == "gz" || file.to_string_lossy().ends_with(".json.gz") {
+        if lighthouse::looks_like_lighthouse(file) {
+            return cmd_lighthouse(file, format);
+        }
         if trace::parser::looks_like_trace(file) {
             return cmd_trace_full(file, format, limit, threshold);
         }
@@ -64,9 +71,12 @@ fn cmd_auto(file: &Path, format: Format, limit: usize, threshold: f64) -> Result
         return cmd_heap_full(file, format, limit);
     }
 
-    // Unknown extension: try heapsnapshot, then trace.
-    if let Ok(()) = cmd_heap_full(file, format, limit) {
+    // Unknown extension: try heapsnapshot, then trace, then lighthouse.
+    if cmd_heap_full(file, format, limit).is_ok() {
         return Ok(());
+    }
+    if lighthouse::looks_like_lighthouse(file) {
+        return cmd_lighthouse(file, format);
     }
     if trace::parser::looks_like_trace(file) {
         return cmd_trace_full(file, format, limit, threshold);
@@ -248,6 +258,17 @@ fn cmd_trace_hotspots(file: &Path, format: Format, limit: usize) -> Result<()> {
     match format {
         Format::Markdown => print!("{}", report::markdown::render_trace_hotspots(&hotspots)),
         Format::Text => print!("{}", report::text::render_trace_hotspots(&hotspots)),
+    }
+    Ok(())
+}
+
+// ---------- lighthouse commands ----------
+
+fn cmd_lighthouse(file: &Path, format: Format) -> Result<()> {
+    let report = lighthouse::LighthouseReport::load(file)?;
+    match format {
+        Format::Markdown => print!("{}", report::markdown::render_lighthouse(&report)),
+        Format::Text => print!("{}", report::text::render_lighthouse(&report)),
     }
     Ok(())
 }

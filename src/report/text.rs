@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::analysis::{Detached, Diff, Summary, TopRetainers};
+use crate::lighthouse;
 use crate::report::{
     fmt_bytes, fmt_delta_bytes, fmt_duration_us, fmt_ms, fmt_num, fmt_signed, sanitize_name,
     truncate,
@@ -23,7 +24,7 @@ struct Table {
 impl Table {
     fn new(headers: &[&str], aligns: Vec<Align>) -> Self {
         assert_eq!(headers.len(), aligns.len());
-        Table {
+        Self {
             headers: headers.iter().map(|s| (*s).to_owned()).collect(),
             aligns,
             rows: Vec::new(),
@@ -48,20 +49,20 @@ impl Table {
         }
 
         // Header
-        for i in 0..cols {
+        for (i, width) in widths.iter().enumerate().take(cols) {
             if i > 0 {
                 out.push_str("  ");
             }
-            push_padded(out, &self.headers[i], widths[i], &self.aligns[i]);
+            push_padded(out, &self.headers[i], *width, &self.aligns[i]);
         }
         out.push('\n');
 
         // Separator
-        for i in 0..cols {
+        for (i, width) in widths.iter().enumerate().take(cols) {
             if i > 0 {
                 out.push_str("  ");
             }
-            for _ in 0..widths[i] {
+            for _ in 0..*width {
                 out.push('-');
             }
         }
@@ -141,12 +142,13 @@ pub fn render_summary(s: &Summary) -> String {
     );
     let total = s.total_self_size.max(1);
     for b in &s.node_type_histogram {
+        #[allow(clippy::cast_precision_loss)]
         let pct = (b.total_self_size as f64 / total as f64) * 100.0;
         t.row(vec![
             b.name.clone(),
             fmt_num(b.count),
             fmt_bytes(b.total_self_size),
-            format!("{:.1}%", pct),
+            format!("{pct:.1}%"),
         ]);
     }
     t.render(&mut out);
@@ -274,13 +276,14 @@ pub fn render_detached(d: &Detached) -> String {
     out
 }
 
+#[allow(clippy::cast_possible_wrap)]
 pub fn render_diff(d: &Diff) -> String {
     let mut out = String::new();
     heading(&mut out, 1, &format!("Diff — {} -> {}", d.a_name, d.b_name));
 
     let delta_nodes = d.b_nodes as i64 - d.a_nodes as i64;
-    let delta_self = d.b_self as i128 - d.a_self as i128;
-    let delta_ret = d.b_retained as i128 - d.a_retained as i128;
+    let delta_self = i128::from(d.b_self) - i128::from(d.a_self);
+    let delta_ret = i128::from(d.b_retained) - i128::from(d.a_retained);
     let _ = writeln!(
         out,
         "Nodes:      {} -> {} ({})",
@@ -303,9 +306,9 @@ pub fn render_diff(d: &Diff) -> String {
         fmt_delta_bytes(delta_ret)
     );
 
-    heading(&mut out, 2, "Δ by type");
+    heading(&mut out, 2, "\u{0394} by type");
     let mut t = Table::new(
-        &["Type", "Count A", "Count B", "Δ count", "Size A", "Size B", "Δ size"],
+        &["Type", "Count A", "Count B", "\u{0394} count", "Size A", "Size B", "\u{0394} size"],
         vec![
             Align::Left,
             Align::Right,
@@ -317,8 +320,8 @@ pub fn render_diff(d: &Diff) -> String {
         ],
     );
     for td in d.type_deltas.iter().take(20) {
-        let dc = td.count_b as i64 - td.count_a as i64;
-        let ds = td.size_b as i128 - td.size_a as i128;
+        let dc = td.count_b.cast_signed() - td.count_a.cast_signed();
+        let ds = i128::from(td.size_b) - i128::from(td.size_a);
         t.row(vec![
             td.name.clone(),
             fmt_num(td.count_a),
@@ -434,6 +437,7 @@ pub fn render_trace_summary(s: &trace::summary::TraceSummary) -> String {
     out
 }
 
+#[allow(clippy::cast_precision_loss)]
 pub fn render_trace_frames(f: &trace::frames::FrameAnalysis) -> String {
     let mut out = String::new();
     heading(
@@ -478,7 +482,7 @@ pub fn render_trace_frames(f: &trace::frames::FrameAnalysis) -> String {
             t.row(vec![
                 b.label.clone(),
                 fmt_num(b.count as u64),
-                format!("{:.1}%", pct),
+                format!("{pct:.1}%"),
             ]);
         }
         t.render(&mut out);
@@ -642,4 +646,177 @@ pub fn render_trace_hotspots(h: &trace::hotspots::HotspotAnalysis) -> String {
     }
 
     out
+}
+
+// ---------- lighthouse renderer ----------
+
+#[allow(clippy::too_many_lines)]
+pub fn render_lighthouse(r: &lighthouse::LighthouseReport) -> String {
+    let mut out = String::new();
+    heading(&mut out, 1, &format!("Lighthouse — {}", r.file_name));
+
+    let _ = writeln!(out, "URL:          {}", r.url);
+    if r.final_url != r.url && !r.final_url.is_empty() {
+        let _ = writeln!(out, "Final URL:    {}", r.final_url);
+    }
+    let _ = writeln!(out, "Fetched:      {}", r.fetch_time);
+    let _ = writeln!(out, "Lighthouse:   v{}", r.lighthouse_version);
+    let _ = writeln!(out, "Device:       {} ({})", r.form_factor, r.throttling.method);
+    let _ = writeln!(
+        out,
+        "Throttling:   RTT {}ms, {:.0} Kbps, {}x CPU slowdown",
+        r.throttling.rtt_ms, r.throttling.throughput_kbps, r.throttling.cpu_slowdown
+    );
+    let _ = writeln!(out, "File:         {}", fmt_bytes(r.file_size));
+
+    if let Some(err) = &r.runtime_error {
+        out.push('\n');
+        let _ = writeln!(out, "!! RUNTIME ERROR: {} — {}", err.code, err.message);
+    }
+    for w in &r.run_warnings {
+        let _ = writeln!(out, "!! WARNING: {w}");
+    }
+
+    // Category scores.
+    if r.categories.iter().any(|c| c.score.is_some()) {
+        heading(&mut out, 2, "Scores");
+        let mut t = Table::new(
+            &["Category", "Score"],
+            vec![Align::Left, Align::Right],
+        );
+        for cat in &r.categories {
+            let score = cat.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            t.row(vec![cat.title.clone(), score]);
+        }
+        t.render(&mut out);
+    }
+
+    // Metrics.
+    let has_metrics = r.metrics.iter().any(|m| m.numeric_value.is_some());
+    if has_metrics {
+        heading(&mut out, 2, "Core Web Vitals / metrics");
+        let mut t = Table::new(
+            &["Metric", "Value", "Score"],
+            vec![Align::Left, Align::Right, Align::Right],
+        );
+        for m in &r.metrics {
+            let val = if m.display_value.is_empty() {
+                m.numeric_value.map_or_else(|| "n/a".to_owned(), |v| format_metric_value(v, &m.numeric_unit))
+            } else {
+                m.display_value.clone()
+            };
+            let score = m.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            t.row(vec![m.title.clone(), val, score]);
+        }
+        t.render(&mut out);
+    }
+
+    // Diagnostics.
+    for diag in &r.diagnostics {
+        let title = if diag.display_value.is_empty() {
+            diag.title.clone()
+        } else {
+            format!("{} ({})", diag.title, diag.display_value)
+        };
+        heading(&mut out, 2, &title);
+        let mut t = Table::new(
+            &["Item", "Value"],
+            vec![Align::Left, Align::Right],
+        );
+        for row in &diag.details {
+            t.row(vec![row.label.clone(), row.value.clone()]);
+        }
+        t.render(&mut out);
+    }
+
+    // Opportunities.
+    if !r.opportunities.is_empty() {
+        heading(&mut out, 2, "Opportunities");
+        for opp in &r.opportunities {
+            let savings = format_savings(opp.wasted_ms, opp.wasted_bytes);
+            let _ = writeln!(out, "{} {}", opp.title, savings);
+            if !opp.items.is_empty() {
+                let mut t = Table::new(
+                    &["URL", "Wasted"],
+                    vec![Align::Left, Align::Right],
+                );
+                for item in &opp.items {
+                    let wasted = format_item_savings(item.wasted_ms, item.wasted_bytes);
+                    t.row(vec![item.url.clone(), wasted]);
+                }
+                t.render(&mut out);
+            }
+            out.push('\n');
+        }
+    }
+
+    // Failed audits.
+    if !r.failed_audits.is_empty() {
+        heading(
+            &mut out,
+            2,
+            &format!(
+                "Failed audits ({} failed, {} passed)",
+                r.failed_audits.len(),
+                r.passed_audits
+            ),
+        );
+        let mut t = Table::new(
+            &["Category", "Audit", "Score"],
+            vec![Align::Left, Align::Left, Align::Right],
+        );
+        for fa in &r.failed_audits {
+            let score = fa.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            t.row(vec![fa.category.clone(), fa.title.clone(), score]);
+        }
+        t.render(&mut out);
+    }
+
+    out
+}
+
+fn format_metric_value(v: f64, unit: &str) -> String {
+    match unit {
+        "millisecond" => fmt_ms(v),
+        "unitless" => format!("{v:.3}"),
+        _ => format!("{v:.1}"),
+    }
+}
+
+fn format_savings(ms: Option<f64>, bytes: Option<f64>) -> String {
+    let mut parts = Vec::new();
+    if let Some(m) = ms
+        && m > 0.0
+    {
+        parts.push(format!("save {}", fmt_ms(m)));
+    }
+    if let Some(b) = bytes
+        && b > 0.0
+    {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let b_u64 = b as u64;
+        parts.push(format!("save {}", fmt_bytes(b_u64)));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(", "))
+    }
+}
+
+fn format_item_savings(ms: Option<f64>, bytes: Option<f64>) -> String {
+    let mut parts = Vec::new();
+    if let Some(m) = ms
+        && m > 0.0
+    {
+        parts.push(fmt_ms(m));
+    }
+    if let Some(b) = bytes
+        && b > 0.0
+    {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let b_u64 = b as u64;
+        parts.push(fmt_bytes(b_u64));
+    }
+    parts.join(", ")
 }

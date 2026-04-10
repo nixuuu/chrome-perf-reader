@@ -29,11 +29,11 @@ pub struct TraceFile {
     pub events: Vec<TraceEvent>,
     /// (pid, tid) → thread name from metadata events.
     pub thread_names: HashMap<(u64, u64), String>,
-    /// pid → process name (from process_name or thread "CrBrowserMain" etc).
+    /// pid → process name (from `process_name` or thread `CrBrowserMain` etc).
     pub process_names: HashMap<u64, String>,
     /// Detected renderer main thread (pid, tid).
     pub main_thread: Option<(u64, u64)>,
-    /// Trace duration in microseconds (max_ts - min_ts of events with ts > 0).
+    /// Trace duration in microseconds (`max_ts` - `min_ts` of events with ts > 0).
     pub duration_us: u64,
     /// Earliest timestamp.
     pub min_ts: u64,
@@ -55,10 +55,10 @@ impl TraceFile {
         let events = parse_events(&bytes)
             .with_context(|| format!("parsing trace {}", path.display()))?;
 
-        Self::build(events)
+        Ok(Self::build(events))
     }
 
-    fn build(events: Vec<TraceEvent>) -> Result<Self> {
+    fn build(events: Vec<TraceEvent>) -> Self {
         let mut thread_names: HashMap<(u64, u64), String> = HashMap::new();
         let mut process_names: HashMap<u64, String> = HashMap::new();
 
@@ -71,10 +71,10 @@ impl TraceFile {
                     if let Some(n) = args.get("name").and_then(|v| v.as_str()) {
                         thread_names.insert((ev.pid, ev.tid), n.to_owned());
                     }
-                } else if ev.name == "process_name" {
-                    if let Some(n) = args.get("name").and_then(|v| v.as_str()) {
-                        process_names.insert(ev.pid, n.to_owned());
-                    }
+                } else if ev.name == "process_name"
+                    && let Some(n) = args.get("name").and_then(|v| v.as_str())
+                {
+                    process_names.insert(ev.pid, n.to_owned());
                 }
             }
         }
@@ -110,21 +110,20 @@ impl TraceFile {
         }
         let duration_us = max_ts.saturating_sub(min_ts);
 
-        Ok(TraceFile {
+        Self {
             events,
             thread_names,
             process_names,
             main_thread,
             duration_us,
             min_ts,
-        })
+        }
     }
 
     pub fn thread_name(&self, pid: u64, tid: u64) -> &str {
         self.thread_names
             .get(&(pid, tid))
-            .map(String::as_str)
-            .unwrap_or("?")
+            .map_or("?", String::as_str)
     }
 }
 

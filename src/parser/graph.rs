@@ -91,6 +91,7 @@ impl HeapGraph {
         let edge_type_names = parse_type_names(&meta.edge_types)
             .ok_or_else(|| anyhow!("malformed meta.edge_types"))?;
 
+        #[allow(clippy::cast_possible_truncation)] // type index always small
         let weak_edge_type = edge_type_names
             .iter()
             .position(|t| t == "weak")
@@ -99,14 +100,14 @@ impl HeapGraph {
         let nodes = raw.nodes;
         let mut edges = raw.edges;
 
-        if nodes.len() % node_stride != 0 {
+        if !nodes.len().is_multiple_of(node_stride) {
             return Err(anyhow!(
                 "nodes len {} not a multiple of stride {}",
                 nodes.len(),
                 node_stride
             ));
         }
-        if edges.len() % edge_stride != 0 {
+        if !edges.len().is_multiple_of(edge_stride) {
             return Err(anyhow!(
                 "edges len {} not a multiple of stride {}",
                 edges.len(),
@@ -118,6 +119,7 @@ impl HeapGraph {
         let edge_count = edges.len() / edge_stride;
 
         // Convert to_node byte-offset → real node index, in place.
+        #[allow(clippy::cast_possible_truncation)] // node_stride fits in u32
         let stride_u32 = node_stride as u32;
         for i in 0..edge_count {
             let slot = i * edge_stride + ef_to_node;
@@ -130,21 +132,20 @@ impl HeapGraph {
         let mut running: u32 = 0;
         for i in 0..node_count {
             first_edge.push(running);
+            #[allow(clippy::cast_possible_truncation)] // edge count per node fits in u32
             let ec = nodes[i * node_stride + nf_edge_count] as u32;
             running = running
                 .checked_add(ec)
-                .ok_or_else(|| anyhow!("edge_count overflow at node {}", i))?;
+                .ok_or_else(|| anyhow!("edge_count overflow at node {i}"))?;
         }
         first_edge.push(running);
         if running as usize != edge_count {
             return Err(anyhow!(
-                "edge_count mismatch: CSR sum {}, header {}",
-                running,
-                edge_count
+                "edge_count mismatch: CSR sum {running}, header {edge_count}"
             ));
         }
 
-        Ok(HeapGraph {
+        Ok(Self {
             node_count,
             edge_count,
             node_stride,
@@ -173,17 +174,16 @@ impl HeapGraph {
     }
 
     pub fn node_type_name(&self, i: usize) -> &str {
+        #[allow(clippy::cast_possible_truncation)] // type index always small
         let t = self.node_type(i) as usize;
-        self.node_type_names
-            .get(t)
-            .map(String::as_str)
-            .unwrap_or("?")
+        self.node_type_names.get(t).map_or("?", String::as_str)
     }
 
     #[inline]
     pub fn node_name(&self, i: usize) -> &str {
+        #[allow(clippy::cast_possible_truncation)] // string index fits in usize
         let idx = self.nodes[i * self.node_stride + self.nf_name] as usize;
-        self.strings.get(idx).map(String::as_str).unwrap_or("")
+        self.strings.get(idx).map_or("", String::as_str)
     }
 
     #[inline]
@@ -197,16 +197,15 @@ impl HeapGraph {
     }
 
     #[inline]
+    #[allow(clippy::cast_possible_truncation)] // edge count per node fits in u32
     pub fn node_edge_count(&self, i: usize) -> u32 {
         self.nodes[i * self.node_stride + self.nf_edge_count] as u32
     }
 
     #[inline]
     pub fn node_detached(&self, i: usize) -> bool {
-        match self.nf_detachedness {
-            Some(off) => self.nodes[i * self.node_stride + off] != 0,
-            None => false,
-        }
+        self.nf_detachedness
+            .is_some_and(|off| self.nodes[i * self.node_stride + off] != 0)
     }
 
     pub fn edges_of(&self, i: usize) -> EdgesIter<'_> {
@@ -241,7 +240,7 @@ pub struct EdgesIter<'a> {
     end: usize,
 }
 
-impl<'a> Iterator for EdgesIter<'a> {
+impl Iterator for EdgesIter<'_> {
     type Item = Edge;
 
     fn next(&mut self) -> Option<Self::Item> {

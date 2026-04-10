@@ -14,12 +14,17 @@ use crate::parser::HeapGraph;
 pub struct Dominators {
     /// Immediate dominator per node (as node index), or -1 if unreachable.
     pub idom: Vec<i32>,
-    /// Retained size per node (= self_size for unreachable nodes).
+    /// Retained size per node (= `self_size` for unreachable nodes).
     pub retained_size: Vec<u64>,
     pub unreachable_count: usize,
     pub unreachable_self_size: u64,
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)] // Node indices fit i32; the -1 sentinel is always checked before casting to usize.
 pub fn compute(graph: &HeapGraph) -> Dominators {
     let n = graph.node_count;
     let root: usize = 0;
@@ -52,8 +57,8 @@ pub fn compute(graph: &HeapGraph) -> Dominators {
             let preds_end = pred_first[node + 1] as usize;
 
             let mut new_idom: i32 = -1;
-            for i in preds_start..preds_end {
-                let p = pred_list[i] as usize;
+            for &pred in &pred_list[preds_start..preds_end] {
+                let p = pred as usize;
                 if idom[p] != -1 {
                     new_idom = p as i32;
                     break;
@@ -63,8 +68,8 @@ pub fn compute(graph: &HeapGraph) -> Dominators {
                 continue;
             }
 
-            for i in preds_start..preds_end {
-                let p = pred_list[i] as i32;
+            for &pred in &pred_list[preds_start..preds_end] {
+                let p = pred as i32;
                 if p == new_idom {
                     continue;
                 }
@@ -100,8 +105,8 @@ pub fn compute(graph: &HeapGraph) -> Dominators {
 
     let unreachable_count = n - order_list.len();
     let mut unreachable_self_size = 0u64;
-    for i in 0..n {
-        if post_order[i] < 0 {
+    for (i, &po) in post_order.iter().enumerate().take(n) {
+        if po < 0 {
             unreachable_self_size =
                 unreachable_self_size.saturating_add(graph.node_self_size(i));
         }
@@ -115,6 +120,7 @@ pub fn compute(graph: &HeapGraph) -> Dominators {
     }
 }
 
+#[allow(clippy::cast_sign_loss)] // Indices are always non-negative when used; negative = early return.
 fn intersect(b1: i32, b2: i32, post_order: &[i32], idom: &[i32]) -> i32 {
     let mut f1 = b1;
     let mut f2 = b2;
@@ -135,7 +141,8 @@ fn intersect(b1: i32, b2: i32, post_order: &[i32], idom: &[i32]) -> i32 {
     f1
 }
 
-/// Iterative DFS — heap graphs can be millions of nodes deep, so a
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // Node count fits i32.
+/// Iterative DFS -- heap graphs can be millions of nodes deep, so a
 /// recursive implementation would stack-overflow.
 fn dfs_post_order(
     graph: &HeapGraph,
@@ -198,6 +205,7 @@ fn dfs_post_order(
     (post_order, order_list)
 }
 
+#[allow(clippy::cast_possible_truncation)] // Node indices fit u32.
 /// CSR reverse adjacency for reachable nodes, skipping weak edges.
 fn build_predecessors(
     graph: &HeapGraph,

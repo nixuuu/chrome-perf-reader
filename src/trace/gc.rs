@@ -23,8 +23,8 @@ pub struct GcEvent {
 }
 
 impl GcBucket {
-    fn empty() -> Self {
-        GcBucket {
+    const fn empty() -> Self {
+        Self {
             count: 0,
             total_ms: 0.0,
             avg_ms: 0.0,
@@ -37,11 +37,13 @@ impl GcBucket {
             return Self::empty();
         }
         let total: f64 = durs.iter().sum();
-        let max = durs.iter().cloned().fold(0.0f64, f64::max);
-        GcBucket {
+        let max = durs.iter().copied().fold(0.0f64, f64::max);
+        #[allow(clippy::cast_precision_loss)]
+        let avg_ms = total / durs.len() as f64;
+        Self {
             count: durs.len(),
             total_ms: total,
-            avg_ms: total / durs.len() as f64,
+            avg_ms,
             max_ms: max,
         }
     }
@@ -57,27 +59,29 @@ pub fn compute(trace: &TraceFile, limit: usize) -> GcAnalysis {
         if ev.ph != "X" {
             continue;
         }
-        let dur = match ev.dur {
-            Some(d) => d,
-            None => continue,
-        };
+        let Some(dur) = ev.dur else { continue };
+        #[allow(clippy::cast_precision_loss)]
         let dur_ms = dur as f64 / 1000.0;
 
         match ev.name.as_str() {
             "MajorGC" => {
                 major_durs.push(dur_ms);
+                #[allow(clippy::cast_precision_loss)]
+                let ts_offset_ms = ev.ts.saturating_sub(trace.min_ts) as f64 / 1000.0;
                 all_gc.push(GcEvent {
                     name: ev.name.clone(),
                     dur_ms,
-                    ts_offset_ms: ev.ts.saturating_sub(trace.min_ts) as f64 / 1000.0,
+                    ts_offset_ms,
                 });
             }
             "MinorGC" => {
                 minor_durs.push(dur_ms);
+                #[allow(clippy::cast_precision_loss)]
+                let ts_offset_ms = ev.ts.saturating_sub(trace.min_ts) as f64 / 1000.0;
                 all_gc.push(GcEvent {
                     name: ev.name.clone(),
                     dur_ms,
-                    ts_offset_ms: ev.ts.saturating_sub(trace.min_ts) as f64 / 1000.0,
+                    ts_offset_ms,
                 });
             }
             _ => {}
@@ -93,6 +97,7 @@ pub fn compute(trace: &TraceFile, limit: usize) -> GcAnalysis {
     let incremental = GcBucket::from_durations(&incr_durs);
 
     let total_gc_time_ms = major_gc.total_ms + minor_gc.total_ms + incremental.total_ms;
+    #[allow(clippy::cast_precision_loss)]
     let trace_ms = trace.duration_us as f64 / 1000.0;
     let gc_pct_of_trace = if trace_ms > 0.0 {
         (total_gc_time_ms / trace_ms) * 100.0

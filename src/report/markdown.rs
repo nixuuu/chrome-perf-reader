@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::analysis::{Detached, Diff, Summary, TopRetainers};
+use crate::lighthouse;
 use crate::report::{
     fmt_bytes, fmt_delta_bytes, fmt_duration_us, fmt_ms, fmt_num, fmt_signed, sanitize_name,
     truncate,
@@ -36,6 +37,7 @@ pub fn render_summary(s: &Summary) -> String {
     out.push_str("| --- | ---: | ---: | ---: |\n");
     let total = s.total_self_size.max(1);
     for b in &s.node_type_histogram {
+        #[allow(clippy::cast_precision_loss)]
         let pct = (b.total_self_size as f64 / total as f64) * 100.0;
         let _ = writeln!(
             out,
@@ -147,7 +149,7 @@ pub fn render_detached(d: &Detached) -> String {
             fmt_bytes(r.self_size),
             fmt_bytes(r.retained_size),
             r.id,
-            chain.join(" ← ")
+            chain.join(" \u{2190} ")
         );
     }
     out.push('\n');
@@ -155,43 +157,44 @@ pub fn render_detached(d: &Detached) -> String {
     out
 }
 
+#[allow(clippy::cast_possible_wrap)]
 pub fn render_diff(d: &Diff) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# Diff — {} → {}", d.a_name, d.b_name);
+    let _ = writeln!(out, "# Diff — {} \u{2192} {}", d.a_name, d.b_name);
     out.push('\n');
 
     let delta_nodes = d.b_nodes as i64 - d.a_nodes as i64;
-    let delta_self = d.b_self as i128 - d.a_self as i128;
-    let delta_ret = d.b_retained as i128 - d.a_retained as i128;
+    let delta_self = i128::from(d.b_self) - i128::from(d.a_self);
+    let delta_ret = i128::from(d.b_retained) - i128::from(d.a_retained);
     let _ = writeln!(
         out,
-        "- Nodes: {} → {} ({})",
+        "- Nodes: {} \u{2192} {} ({})",
         fmt_num(d.a_nodes as u64),
         fmt_num(d.b_nodes as u64),
         fmt_signed(delta_nodes)
     );
     let _ = writeln!(
         out,
-        "- Self size: {} → {} ({})",
+        "- Self size: {} \u{2192} {} ({})",
         fmt_bytes(d.a_self),
         fmt_bytes(d.b_self),
         fmt_delta_bytes(delta_self)
     );
     let _ = writeln!(
         out,
-        "- Retained: {} → {} ({})",
+        "- Retained: {} \u{2192} {} ({})",
         fmt_bytes(d.a_retained),
         fmt_bytes(d.b_retained),
         fmt_delta_bytes(delta_ret)
     );
     out.push('\n');
 
-    out.push_str("## Δ by type\n\n");
-    out.push_str("| Type | Count A | Count B | Δ count | Size A | Size B | Δ size |\n");
+    out.push_str("## \u{0394} by type\n\n");
+    out.push_str("| Type | Count A | Count B | \u{0394} count | Size A | Size B | \u{0394} size |\n");
     out.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     for td in d.type_deltas.iter().take(20) {
-        let dc = td.count_b as i64 - td.count_a as i64;
-        let ds = td.size_b as i128 - td.size_a as i128;
+        let dc = td.count_b.cast_signed() - td.count_a.cast_signed();
+        let ds = i128::from(td.size_b) - i128::from(td.size_a);
         let _ = writeln!(
             out,
             "| {} | {} | {} | {} | {} | {} | {} |",
@@ -245,6 +248,170 @@ pub fn render_diff(d: &Diff) -> String {
     }
 
     out
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn render_lighthouse(r: &lighthouse::LighthouseReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# Lighthouse — {}", r.file_name);
+    out.push('\n');
+    let _ = writeln!(out, "- URL: {}", r.url);
+    if r.final_url != r.url && !r.final_url.is_empty() {
+        let _ = writeln!(out, "- Final URL: {}", r.final_url);
+    }
+    let _ = writeln!(out, "- Fetched: {}", r.fetch_time);
+    let _ = writeln!(out, "- Lighthouse: v{}", r.lighthouse_version);
+    let _ = writeln!(out, "- Device: {} ({})", r.form_factor, r.throttling.method);
+    let _ = writeln!(
+        out,
+        "- Throttling: RTT {}ms, {:.0} Kbps, {}x CPU slowdown",
+        r.throttling.rtt_ms, r.throttling.throughput_kbps, r.throttling.cpu_slowdown
+    );
+    let _ = writeln!(out, "- File: {}", fmt_bytes(r.file_size));
+    out.push('\n');
+
+    if let Some(err) = &r.runtime_error {
+        let _ = writeln!(out, "> **Runtime error**: {} — {}", err.code, err.message);
+        out.push('\n');
+    }
+    for w in &r.run_warnings {
+        let _ = writeln!(out, "> **Warning**: {w}");
+    }
+    if !r.run_warnings.is_empty() {
+        out.push('\n');
+    }
+
+    // Category scores.
+    if r.categories.iter().any(|c| c.score.is_some()) {
+        out.push_str("## Scores\n\n");
+        out.push_str("| Category | Score |\n");
+        out.push_str("| --- | ---: |\n");
+        for cat in &r.categories {
+            let score = cat.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            let _ = writeln!(out, "| {} | {} |", cat.title, score);
+        }
+        out.push('\n');
+    }
+
+    // Metrics.
+    let has_metrics = r.metrics.iter().any(|m| m.numeric_value.is_some());
+    if has_metrics {
+        out.push_str("## Core Web Vitals / metrics\n\n");
+        out.push_str("| Metric | Value | Score |\n");
+        out.push_str("| --- | ---: | ---: |\n");
+        for m in &r.metrics {
+            let val = if m.display_value.is_empty() {
+                m.numeric_value.map_or_else(|| "n/a".to_owned(), |v| format_metric_value(v, &m.numeric_unit))
+            } else {
+                m.display_value.clone()
+            };
+            let score = m.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            let _ = writeln!(out, "| {} | {} | {} |", m.title, val, score);
+        }
+        out.push('\n');
+    }
+
+    // Diagnostics.
+    for diag in &r.diagnostics {
+        let title = if diag.display_value.is_empty() {
+            diag.title.clone()
+        } else {
+            format!("{} ({})", diag.title, diag.display_value)
+        };
+        let _ = writeln!(out, "## {title}");
+        out.push('\n');
+        out.push_str("| Item | Value |\n");
+        out.push_str("| --- | ---: |\n");
+        for row in &diag.details {
+            let _ = writeln!(out, "| {} | {} |", escape(&row.label), row.value);
+        }
+        out.push('\n');
+    }
+
+    // Opportunities.
+    if !r.opportunities.is_empty() {
+        out.push_str("## Opportunities\n\n");
+        for opp in &r.opportunities {
+            let savings = format_savings(opp.wasted_ms, opp.wasted_bytes);
+            let _ = writeln!(out, "### {} {}", opp.title, savings);
+            out.push('\n');
+            if !opp.items.is_empty() {
+                out.push_str("| URL | Wasted |\n");
+                out.push_str("| --- | ---: |\n");
+                for item in &opp.items {
+                    let wasted = format_item_savings(item.wasted_ms, item.wasted_bytes);
+                    let _ = writeln!(out, "| `{}` | {} |", escape(&item.url), wasted);
+                }
+                out.push('\n');
+            }
+        }
+    }
+
+    // Failed audits.
+    if !r.failed_audits.is_empty() {
+        let _ = writeln!(
+            out,
+            "## Failed audits ({} failed, {} passed)",
+            r.failed_audits.len(),
+            r.passed_audits
+        );
+        out.push('\n');
+        out.push_str("| Category | Audit | Score |\n");
+        out.push_str("| --- | --- | ---: |\n");
+        for fa in &r.failed_audits {
+            let score = fa.score.map_or_else(|| "n/a".to_owned(), |s| format!("{:.0}", s * 100.0));
+            let _ = writeln!(out, "| {} | {} | {} |", fa.category, fa.title, score);
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn format_metric_value(v: f64, unit: &str) -> String {
+    match unit {
+        "millisecond" => fmt_ms(v),
+        "unitless" => format!("{v:.3}"),
+        _ => format!("{v:.1}"),
+    }
+}
+
+fn format_savings(ms: Option<f64>, bytes: Option<f64>) -> String {
+    let mut parts = Vec::new();
+    if let Some(m) = ms
+        && m > 0.0
+    {
+        parts.push(format!("save {}", fmt_ms(m)));
+    }
+    if let Some(b) = bytes
+        && b > 0.0
+    {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let b_u64 = b as u64;
+        parts.push(format!("save {}", fmt_bytes(b_u64)));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(", "))
+    }
+}
+
+fn format_item_savings(ms: Option<f64>, bytes: Option<f64>) -> String {
+    let mut parts = Vec::new();
+    if let Some(m) = ms
+        && m > 0.0
+    {
+        parts.push(fmt_ms(m));
+    }
+    if let Some(b) = bytes
+        && b > 0.0
+    {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let b_u64 = b as u64;
+        parts.push(fmt_bytes(b_u64));
+    }
+    parts.join(", ")
 }
 
 fn escape(s: &str) -> String {
@@ -315,6 +482,7 @@ pub fn render_trace_summary(s: &trace::summary::TraceSummary) -> String {
     out
 }
 
+#[allow(clippy::cast_precision_loss)]
 pub fn render_trace_frames(f: &trace::frames::FrameAnalysis) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -402,8 +570,8 @@ fn format_source(func: &str, url: &str) -> String {
     match (func.is_empty(), url.is_empty()) {
         (true, true) => String::new(),
         (true, false) => url.to_owned(),
-        (false, true) => format!("`{}`", func),
-        (false, false) => format!("`{}` ({url})", func),
+        (false, true) => format!("`{func}`"),
+        (false, false) => format!("`{func}` ({url})"),
     }
 }
 

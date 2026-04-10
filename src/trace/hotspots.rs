@@ -36,19 +36,12 @@ pub fn compute(trace: &TraceFile, limit: usize) -> HotspotAnalysis {
         if ev.name != "FunctionCall" && ev.name != "EvaluateScript" {
             continue;
         }
-        let dur_ms = match ev.dur {
-            Some(d) => d as f64 / 1000.0,
-            None => continue,
-        };
+        let Some(dur) = ev.dur else { continue };
+        #[allow(clippy::cast_precision_loss)]
+        let dur_ms = dur as f64 / 1000.0;
 
-        let args = match &ev.args {
-            Some(a) => a,
-            None => continue,
-        };
-        let data = match args.get("data") {
-            Some(d) => d,
-            None => continue,
-        };
+        let Some(args) = &ev.args else { continue };
+        let Some(data) = args.get("data") else { continue };
 
         let url = data
             .get("url")
@@ -64,9 +57,10 @@ pub fn compute(trace: &TraceFile, limit: usize) -> HotspotAnalysis {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        #[allow(clippy::cast_possible_truncation)]
         let line = data
             .get("lineNumber")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(0) as u32;
 
         // URL aggregation.
@@ -95,6 +89,7 @@ pub fn compute(trace: &TraceFile, limit: usize) -> HotspotAnalysis {
             url,
             call_count: count,
             total_ms: total,
+            #[allow(clippy::cast_precision_loss)]
             avg_ms: if count > 0 {
                 total / count as f64
             } else {
