@@ -2,10 +2,19 @@
 name = "chrome-perf-reader"
 version = "0.2.0"
 edition = "2024"
+description = "CLI that parses Chrome DevTools heap snapshots, traces, and Lighthouse reports into human- and LLM-friendly summaries"
+license = "MIT"
+repository = "https://github.com/nixuuu/chrome-perf-reader"
+homepage = "https://github.com/nixuuu/chrome-perf-reader"
+readme = "README.md"
+keywords = ["chrome", "devtools", "performance", "heap", "trace"]
+categories = ["command-line-utilities", "development-tools::profiling"]
 
 [[bin]]
 name = "chrome-perf-reader"
 path = "src/main.rs"
+
+[workspace]
 
 [dependencies]
 anyhow = "1"
@@ -26,3 +35,22 @@ nursery = "deny"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+installers = ["shell", "powershell", "homebrew"]
+tap = "nixuuu/homebrew-tap"
+publish-jobs = ["homebrew"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+pr-run-mode = "plan"

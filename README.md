@@ -12,16 +12,30 @@ Output is designed to be pasted directly into an LLM for analysis, or read by a 
 
 ## Installation
 
+### Shell (Linux / macOS)
+
 ```sh
-cargo install --git https://github.com/nixuuu/chrome-perf-reader
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/nixuuu/chrome-perf-reader/releases/latest/download/chrome-perf-reader-installer.sh | sh
 ```
 
-Or from source:
+### PowerShell (Windows)
+
+```powershell
+powershell -c "irm https://github.com/nixuuu/chrome-perf-reader/releases/latest/download/chrome-perf-reader-installer.ps1 | iex"
+```
+
+### Homebrew
 
 ```sh
-git clone https://github.com/nixuuu/chrome-perf-reader
-cd chrome-perf-reader
-cargo install --path .
+brew tap nixuuu/tap
+brew install chrome-perf-reader
+```
+
+### From source
+
+```sh
+cargo install --git https://github.com/nixuuu/chrome-perf-reader
 ```
 
 ## Usage
